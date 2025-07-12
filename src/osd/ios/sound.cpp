@@ -7,6 +7,7 @@
 
 // MAME headers
 #include "emu.h"
+#include "interface/audio.h"
 
 // IOS headers
 #include "iososd.h"
@@ -23,6 +24,27 @@ void ios_osd_interface::sound_init()
 {
     osd_printf_verbose("ios_osd_interface::sound_init\n");
     
+    // Initialize audio info structure
+    m_audio_info = osd::audio_info();
+    m_audio_info.m_generation = 0;
+    m_next_stream_id = 1;
+
+    // Create a default sink node for iOS audio output
+    osd::audio_info::node_info sink_node;
+    sink_node.m_name = "ios_output";
+    sink_node.m_display_name = "iOS Audio Output";
+    sink_node.m_id = 1;
+    sink_node.m_rate.m_default_rate = 48000;
+    sink_node.m_rate.m_min_rate = 8000;
+    sink_node.m_rate.m_max_rate = 48000;
+    sink_node.m_port_names = {"Left", "Right"};
+    sink_node.m_port_positions = {osd::channel_position::FL(), osd::channel_position::FR()};
+    sink_node.m_sinks = 1;
+    sink_node.m_sources = 0;    
+    m_audio_info.m_nodes.push_back(sink_node);
+    m_audio_info.m_default_sink = 1;
+    m_audio_info.m_default_source = 0;    
+
     // if the host does not want to handle audio, do a default
     if (m_callbacks.sound_play == NULL)
     {
@@ -39,7 +61,7 @@ void ios_osd_interface::sound_init()
     if (m_sample_rate != 0)
     {
         // set the startup volume
-        set_mastervolume(0);
+        // set_mastervolume(0);
         m_callbacks.sound_init(m_sample_rate, 1);
     }
 }
@@ -51,11 +73,44 @@ void ios_osd_interface::sound_init()
 void ios_osd_interface::sound_exit()
 {
     osd_printf_verbose("ios_osd_interface::sound_exit\n");
+
+    // Close all open streams
+    m_audio_info.m_streams.clear();
+
     if (m_sample_rate != 0)
     {
         m_callbacks.sound_exit();
     }
 }
+
+//============================================================
+//  osd::channel_position implementation
+//============================================================
+
+namespace osd {
+
+std::string channel_position::name() const
+{
+    if (*this == FC()) return "FC";
+    if (*this == FL()) return "FL";
+    if (*this == FR()) return "FR";
+    if (*this == RC()) return "RC";
+    if (*this == RL()) return "RL";
+    if (*this == RR()) return "RR";
+    if (*this == HC()) return "HC";
+    if (*this == HL()) return "HL";
+    if (*this == HR()) return "HR";
+    if (*this == BACKREST()) return "BACKREST";
+    if (*this == LFE()) return "LFE";
+    if (*this == ONREQ()) return "ONREQ";
+    if (*this == UNKNOWN()) return "UNKNOWN";
+    
+   // For custom positions, return coordinates
+    return "(" + std::to_string(m_x) + "," + std::to_string(m_y) + "," + std::to_string(m_z) + ")";
+}
+
+} // namespace osd
+
 
 //============================================================
 //    Apply attenuation
@@ -74,45 +129,148 @@ static void att_memcpy(void *dest, const int16_t *data, int bytes_to_copy, int a
 }
 
 //============================================================
-//    osd_update_audio_stream
+//  NEW: sound interface implementation
 //============================================================
-
-void ios_osd_interface::update_audio_stream(const int16_t *buffer, int samples_this_frame)
+bool ios_osd_interface::no_sound()
 {
-    osd_printf_verbose("ios_osd_interface::update_audio_stream: samples=%d attenuation=%d\n", samples_this_frame, m_attenuation);
+    return m_sample_rate == 0;
+}
+
+osd::audio_info ios_osd_interface::sound_get_information()
+{
+    return m_audio_info;
+}
+
+uint32_t ios_osd_interface::sound_stream_sink_open(uint32_t node, std::string name, uint32_t rate)
+{
+    osd_printf_verbose("ios_osd_interface::sound_stream_sink_open: node=%d name=%s rate=%d\n", node, name.c_str(), rate);
+    
+    osd::audio_info::stream_info stream;
+    stream.m_id = m_next_stream_id++;
+    stream.m_node = node;
+    
+    m_audio_info.m_streams.push_back(stream);
+    m_audio_info.m_generation++;
+    
+    return stream.m_id;
+}
+
+uint32_t ios_osd_interface::sound_stream_source_open(uint32_t node, std::string name, uint32_t rate)
+{
+    osd_printf_verbose("ios_osd_interface::sound_stream_source_open: node=%d name=%s rate=%d\n", node, name.c_str(), rate);
+    
+    osd::audio_info::stream_info stream;
+    stream.m_id = m_next_stream_id++;
+    stream.m_node = node;
+    
+    m_audio_info.m_streams.push_back(stream);
+    m_audio_info.m_generation++;
+    
+    return stream.m_id;
+}
+
+void ios_osd_interface::sound_stream_close(uint32_t id)
+{
+    osd_printf_verbose("ios_osd_interface::sound_stream_close: id=%d\n", id);
+    
+    auto it = std::find_if(m_audio_info.m_streams.begin(), m_audio_info.m_streams.end(),
+                          [id](const osd::audio_info::stream_info& stream) { return stream.m_id == id; });
+    
+    if (it != m_audio_info.m_streams.end())
+    {
+        m_audio_info.m_streams.erase(it);
+        m_audio_info.m_generation++;
+    }
+}
+
+void ios_osd_interface::sound_stream_sink_update(uint32_t id, const int16_t *buffer, int samples_this_frame)
+{
+    osd_printf_verbose("ios_osd_interface::sound_stream_sink_update: id=%d samples=%d attenuation=%d\n", id, samples_this_frame, m_attenuation);
 
     static unsigned char bufferatt[882*2*2*10];
 
-    if (m_sample_rate != 0 )
+    if (m_sample_rate != 0)
     {
+        const int16_t *output_buffer = buffer;
+        
+        // Apply attenuation if needed
         if (m_attenuation != 0)
         {
             if (samples_this_frame * 2 * 2 >= sizeof(bufferatt))
                 samples_this_frame = sizeof(bufferatt) / (2 * 2);
                 
-            att_memcpy(bufferatt,buffer,samples_this_frame * sizeof(int16_t) * 2, m_attenuation);
-            buffer = (int16_t *)bufferatt;
+            att_memcpy(bufferatt, buffer, samples_this_frame * sizeof(int16_t) * 2, m_attenuation);
+            output_buffer = (int16_t *)bufferatt;
         }
-        m_callbacks.sound_play((void*)buffer,samples_this_frame * sizeof(int16_t) * 2);
+        
+        // Send to iOS audio system
+        m_callbacks.sound_play((void*)output_buffer, samples_this_frame * sizeof(int16_t) * 2);
     }
 }
 
-void ios_osd_interface::set_mastervolume(int attenuation)
+void ios_osd_interface::sound_stream_source_update(uint32_t id, int16_t *buffer, int samples_this_frame)
 {
-    // clamp the attenuation to 0-32 range
-    if (attenuation > 0)
-        attenuation = 0;
-    if (attenuation < -32)
-        attenuation = -32;
-
-    m_attenuation = attenuation;
-    //m_attenuation_level = (int)(pow(10.0, (float)m_attenuation / 20.0) * 128.0);
+    osd_printf_verbose("ios_osd_interface::sound_stream_source_update: id=%d samples=%d\n", id, samples_this_frame);
+    
+    // For iOS, we typically don't have audio input, so fill with silence
+    memset(buffer, 0, samples_this_frame * sizeof(int16_t) * 2);
 }
 
-bool ios_osd_interface::no_sound()
+void ios_osd_interface::sound_stream_set_volumes(uint32_t id, const std::vector<float> &db)
 {
-    return m_sample_rate == 0;
+    osd_printf_verbose("ios_osd_interface::sound_stream_set_volumes: id=%d\n", id);
+    
+    auto it = std::find_if(m_audio_info.m_streams.begin(), m_audio_info.m_streams.end(),
+                          [id](osd::audio_info::stream_info& stream) { return stream.m_id == id; });
+    
+    if (it != m_audio_info.m_streams.end())
+    {
+        it->m_volumes = db;
+        m_audio_info.m_generation++;
+    }
 }
+
+
+//============================================================
+//    osd_update_audio_stream
+//============================================================
+
+// void ios_osd_interface::update_audio_stream(const int16_t *buffer, int samples_this_frame)
+// {
+//     osd_printf_verbose("ios_osd_interface::update_audio_stream: samples=%d attenuation=%d\n", samples_this_frame, m_attenuation);
+
+//     static unsigned char bufferatt[882*2*2*10];
+
+//     if (m_sample_rate != 0 )
+//     {
+//         if (m_attenuation != 0)
+//         {
+//             if (samples_this_frame * 2 * 2 >= sizeof(bufferatt))
+//                 samples_this_frame = sizeof(bufferatt) / (2 * 2);
+                
+//             att_memcpy(bufferatt,buffer,samples_this_frame * sizeof(int16_t) * 2, m_attenuation);
+//             buffer = (int16_t *)bufferatt;
+//         }
+//         m_callbacks.sound_play((void*)buffer,samples_this_frame * sizeof(int16_t) * 2);
+//     }
+// }
+
+// void ios_osd_interface::set_mastervolume(int attenuation)
+// {
+//     // clamp the attenuation to 0-32 range
+//     if (attenuation > 0)
+//         attenuation = 0;
+//     if (attenuation < -32)
+//         attenuation = -32;
+
+//     m_attenuation = attenuation;
+//     //m_attenuation_level = (int)(pow(10.0, (float)m_attenuation / 20.0) * 128.0);
+// }
+
+// bool ios_osd_interface::no_sound()
+// {
+//     return m_sample_rate == 0;
+// }
 
 //============================================================
 //  default sound impl

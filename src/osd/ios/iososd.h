@@ -64,9 +64,19 @@ public:
     virtual void wait_for_debugger(device_t &device, bool firststop) override {}
 
     // audio overridables
-    virtual void update_audio_stream(const int16_t *buffer, int samples_this_frame) override;
-    virtual void set_mastervolume(int attenuation) override;
     virtual bool no_sound() override;
+    virtual bool sound_external_per_channel_volume() override { return false; }
+    virtual bool sound_split_streams_per_source() override { return false; }
+    virtual uint32_t sound_get_generation() override { return m_audio_info.m_generation; }
+    virtual osd::audio_info sound_get_information() override;
+    virtual uint32_t sound_stream_sink_open(uint32_t node, std::string name, uint32_t rate) override;
+    virtual uint32_t sound_stream_source_open(uint32_t node, std::string name, uint32_t rate) override;
+    virtual void sound_stream_close(uint32_t id) override;
+    virtual void sound_stream_sink_update(uint32_t id, const int16_t *buffer, int samples_this_frame) override;
+    virtual void sound_stream_source_update(uint32_t id, int16_t *buffer, int samples_this_frame) override;
+    virtual void sound_stream_set_volumes(uint32_t id, const std::vector<float> &db) override;
+    virtual void sound_begin_update() override {}
+    virtual void sound_end_update() override {}    
 
     // input overridables
     virtual void customize_input_type_list(std::vector<input_type_entry> &typelist) override;
@@ -127,6 +137,18 @@ private:
     // audio
     int m_attenuation;
     int m_sample_rate;
+    osd::audio_info m_audio_info;
+    uint32_t m_next_stream_id;
+
+    struct sound_stream_info {
+        uint32_t id;
+        uint32_t node;
+        std::string name;
+        uint32_t rate;
+        bool is_sink;
+        std::vector<float> volumes;
+    };
+    std::vector<sound_stream_info> m_sound_streams;    
 
     // host ios app callbacks
     myosd_callbacks m_callbacks;
