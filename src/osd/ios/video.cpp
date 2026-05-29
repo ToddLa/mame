@@ -84,10 +84,10 @@ static void convert_prim(myosd_render_primitive &myosd_prim, const render_primit
     _Static_assert(MYOSD_ORIENTATION_SWAP_XY == ORIENTATION_SWAP_XY, "");
 
     myosd_prim.blendmode = PRIMFLAG_GET_BLENDMODE(prim.flags);
-    _Static_assert(MYOSD_BLENDMODE_NONE == BLENDMODE_NONE, "");
-    _Static_assert(MYOSD_BLENDMODE_ALPHA == BLENDMODE_ALPHA, "");
-    _Static_assert(MYOSD_BLENDMODE_RGB_MULTIPLY == BLENDMODE_RGB_MULTIPLY, "");
-    _Static_assert(MYOSD_BLENDMODE_ADD == BLENDMODE_ADD, "");
+    _Static_assert(MYOSD_BLENDMODE_NONE == +BLENDMODE_NONE, "");
+    _Static_assert(MYOSD_BLENDMODE_ALPHA == +BLENDMODE_ALPHA, "");
+    _Static_assert(MYOSD_BLENDMODE_RGB_MULTIPLY == +BLENDMODE_RGB_MULTIPLY, "");
+    _Static_assert(MYOSD_BLENDMODE_ADD == +BLENDMODE_ADD, "");
 
     myosd_prim.antialias = PRIMFLAG_GET_ANTIALIAS(prim.flags);
     myosd_prim.screentex = PRIMFLAG_GET_SCREENTEX(prim.flags);

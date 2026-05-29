@@ -203,7 +203,7 @@ enum
 };
 
 /* blending modes */
-enum
+enum : int
 {
     MYOSD_BLENDMODE_NONE = 0,             /* no blending */
     MYOSD_BLENDMODE_ALPHA,                /* standard alpha blend */
